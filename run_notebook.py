@@ -444,7 +444,8 @@ print('âœ… Price Intelligence Engine ready')
 
 # ── Cell: 17-features ──────────────────────────────────────────────
 # â”€â”€ Flexible Date Hunter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-def _find_flexible_dates(origin, destination, base_departure, return_date=None, flexibility=7):
+def _find_flexible_dates(origin, destination, base_departure, return_date=None, flexibility=5):
+    flexibility = min(flexibility, 5)  # cap at Â±5 days to stay within free-tier token limits
     base = datetime.strptime(base_departure, '%Y-%m-%d')
     candidates = []
     for delta in range(-flexibility, flexibility + 1):
@@ -453,14 +454,14 @@ def _find_flexible_dates(origin, destination, base_departure, return_date=None, 
             flights = search_all_sources(origin, destination, dep, return_date)
             if flights:
                 best = min(flights, key=lambda f: f.get('price', float('inf')))
-                best['dep_date'] = dep
-                best['delta'] = delta
-                candidates.append(best)
+                candidates.append({'dep_date': dep, 'delta': delta,
+                                   'price': best.get('price', 0),
+                                   'airline': best.get('airline', '?')})
         except Exception:
             pass
     if not candidates:
         return {'message': 'No flights found in flexible date range', 'options': []}
-    return {'options': sorted(candidates, key=lambda f: f.get('price', float('inf')))[:7]}
+    return {'options': sorted(candidates, key=lambda f: f['price'])[:5]}
 
 # â”€â”€ Airport Optimization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 AIRPORT_GROUPS = {
@@ -528,32 +529,26 @@ def detect_error_fare(current_price: float, route: str, stats: dict) -> dict:
     hist_min = stats.get('historical_min') or current_price
     alerts = []
     confidence = 0
-
     if avg30 > 0:
         pct_below = (avg30 - current_price) / avg30 * 100
         if pct_below >= 50:
             confidence += 50
             alerts.append(f'{pct_below:.0f}% below 30-day average (R${avg30:,.0f})')
-
     if hist_min > 0 and current_price < hist_min * 0.65:
         confidence += 40
         alerts.append(f'{((hist_min-current_price)/hist_min*100):.0f}% below historical minimum (R${hist_min:,.0f})')
-
     if route.upper() in LONG_HAUL_ROUTES and current_price < FLOOR_PRICES['long_haul_brl']:
         confidence += 30
         alerts.append(f'Below floor price for long-haul route (R${current_price:,.0f} < R${FLOOR_PRICES["long_haul_brl"]:,})')
-
     is_error = confidence >= 50
     return {
-        'is_error_fare': is_error,
-        'confidence': min(100, confidence),
-        'alerts': alerts,
+        'is_error_fare': is_error, 'confidence': min(100, confidence), 'alerts': alerts,
         'message': (f'POSSIBLE ERROR FARE (confidence {min(100,confidence)}%)\n'
                     f'Normal: R${avg30:,.0f} -> Found: R${current_price:,.0f}\n'
                     + '\n'.join(alerts)) if is_error else 'Normal fare'
     }
 
-print('Flexible Dates, Airport Optimization, Miles Intelligence, Error Fare Detector -- all ready')
+print('Features ready')
 
 # ── Cell: 19-notifications ──────────────────────────────────────────────
 def _deal_message(flight: dict, buy_score: dict, stats: dict) -> str:
@@ -699,7 +694,6 @@ def search_flights(origin: str, destination: str, departure_date: str,
     flights = search_all_airports(origin, destination, departure_date, rdate)
     if not flights:
         return f'No flights found from {origin} to {destination} on {departure_date}.'
-
     route = f'{origin}-{destination}'
     lines = [f'\nâœˆï¸ Flights {origin} â†’ {destination} on {departure_date}\n']
     for f in flights[:6]:
@@ -712,8 +706,7 @@ def search_flights(origin: str, destination: str, departure_date: str,
         lines.append(
             f'  {f.get("airline", "?")} {f.get("flight_number", "")} | '
             f'R${f.get("price", 0):,.0f} | {f.get("stops", 0)} stop(s) | '
-            f'{f.get("duration", "")} | '
-            f'Score {score["score"]}/100 {score["recommendation"]}{ef_tag}'
+            f'{f.get("duration", "")} | Score {score["score"]}/100 {score["recommendation"]}{ef_tag}'
         )
     return '\n'.join(lines)
 
@@ -760,21 +753,20 @@ def get_buy_recommendation(origin: str, destination: str, current_price: float) 
 
 @function_tool
 def search_flexible_dates(origin: str, destination: str, target_date: str,
-                          flexibility_days: int = 7) -> str:
-    '''Find the cheapest departure date within Â±flexibility_days of target_date.
-    Use this tool whenever the user asks about flexible dates, cheapest dates, or best time to fly.
+                          flexibility_days: int = 5) -> str:
+    '''Find the cheapest departure date within Â±flexibility_days of target_date (capped at Â±5).
+    Call this tool ONCE for the primary airport pair when asked about flexible dates.
     target_date: YYYY-MM-DD format.'''
-    res = _find_flexible_dates(origin, destination, target_date, flexibility_days=flexibility_days)
+    res = _find_flexible_dates(origin, destination, target_date, flexibility=min(flexibility_days, 5))
     opts = res.get('options', [])
     if not opts:
         return f'No flights found near {target_date} for {origin} â†’ {destination}.'
-    lines = [f'\nðŸ—“ï¸ Best Dates: {origin} â†’ {destination} (Â±{flexibility_days} days from {target_date})\n']
+    lines = [f'Best dates {origin}â†’{destination} (Â±5d from {target_date}):']
     for f in opts:
         delta = f.get('delta', 0)
-        tag = 'same day' if delta == 0 else f'{abs(delta)}d {"earlier" if delta < 0 else "later"}'
-        lines.append(f'  {f.get("dep_date", "?")} ({tag}): R${f.get("price", 0):,.0f} â€” {f.get("airline", "?")}')
-    best = opts[0]
-    lines.append(f'\n  âœ… Best: {best.get("dep_date")} at R${best.get("price", 0):,.0f}')
+        tag = 'same' if delta == 0 else f'{abs(delta)}d {"earlier" if delta < 0 else "later"}'
+        lines.append(f'  {f["dep_date"]} ({tag}): R${f["price"]:,.0f} â€” {f["airline"]}')
+    lines.append(f'BEST: {opts[0]["dep_date"]} R${opts[0]["price"]:,.0f}')
     return '\n'.join(lines)
 
 @function_tool
@@ -828,24 +820,20 @@ def get_overview(request: str = 'summary') -> str:
     c.execute('SELECT route, MIN(price), MAX(price), COUNT(*) FROM flight_search_history GROUP BY route ORDER BY MIN(price)')
     routes = c.fetchall()
     conn.close()
-
     lines = ['\nðŸŒ ELITE FLIGHT DEAL HUNTER â€” DASHBOARD\n']
     lines.append(f'Origins     : {", ".join(profile["origins"])}')
     lines.append(f'Destinations: {", ".join(profile["destinations"])}')
     lines.append(f'Max budget  : R${profile["max_budget_brl"]:,.0f}')
     lines.append(f'Total prices tracked: {total}')
-
     if routes:
         lines.append('\nðŸ“Š Best Prices Found:')
         for route, min_p, max_p, count in routes[:8]:
             lines.append(f'  {route}: R${min_p:,.0f} â€“ R${max_p:,.0f} ({count} searches)')
-
     monitoring = profile.get('monitoring', [])
     if monitoring:
         lines.append('\nðŸ‘ï¸ Watchlist:')
         for m in monitoring[-5:]:
             lines.append(f'  {m["origin"]} â†’ {m["destination"]} â€” {m["target_month"]}')
-
     return '\n'.join(lines)
 
 print('âœ… 8 agent tools defined')
