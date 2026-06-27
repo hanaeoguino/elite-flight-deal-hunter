@@ -283,54 +283,43 @@ print('âœ… Kiwi source loaded')
 # â”€â”€ Unified search with mock fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 MOCK_AIRLINES = [
     ('LATAM Airlines', 'LA', 2800),
-    ('Air France', 'AF', 3100),
-    ('TAP Portugal', 'TP', 2600),
-    ('Iberia', 'IB', 3300),
-    ('Lufthansa', 'LH', 3500),
+    ('Air France',     'AF', 3100),
+    ('TAP Portugal',   'TP', 2600),
 ]
 
 def _mock_flights(origin, destination, departure_date):
-    """Realistic mock data when no API keys are configured."""
     results = []
-    base = random.uniform(2400, 4800)
-    for name, code, typical in MOCK_AIRLINES[:4]:
+    for name, code, typical in MOCK_AIRLINES[:2]:   # 2 airlines = half the token output
         price = round(typical * random.uniform(0.75, 1.35), 2)
         results.append({
             'airline': name, 'flight_number': f'{code}{random.randint(100, 999)}',
             'origin': origin, 'destination': destination,
             'departure': f'{departure_date}T{random.randint(6, 22):02d}:00',
-            'arrival': '', 'duration': f'{random.randint(12, 16)}h{random.choice([0, 15, 30, 45]):02d}m',
-            'stops': random.choice([0, 1, 1]),
-            'bags': 1, 'price': price, 'currency': 'BRL',
-            'url': f'https://example.com/flights/{origin}-{destination}',
-            'source': 'mock',
+            'arrival': '', 'duration': f'{random.randint(12, 16)}h00m',
+            'stops': random.choice([0, 1]), 'bags': 1, 'price': price, 'currency': 'BRL',
+            'url': f'https://example.com/flights/{origin}-{destination}', 'source': 'mock',
         })
     return results
 
 def search_all_sources(origin, destination, departure_date, return_date=None):
     results = []
     errors = []
-
     for name, fn in [('Amadeus', search_amadeus),
                      ('Google Flights', search_google_flights),
                      ('Kiwi', search_kiwi)]:
         try:
-            found = fn(origin, destination, departure_date, return_date)
-            results.extend(found)
+            results.extend(fn(origin, destination, departure_date, return_date))
         except Exception as e:
             errors.append(f'{name}: {type(e).__name__}')
-
     if not results:
-        print(f'   âš¡ Using mock data (APIs not configured: {", ".join(errors)})')
+        print(f'   âš¡ Using mock data ({", ".join(errors)})')
         results = _mock_flights(origin, destination, departure_date)
-
     seen, unique = set(), []
     for f in results:
         key = (f.get('airline'), round(f.get('price', 0)), f.get('departure', '')[:10])
         if key not in seen:
             seen.add(key)
             unique.append(f)
-
     return sorted(unique, key=lambda f: f.get('price', float('inf')))
 
 print('âœ… Unified search ready (Amadeus + Google Flights + Kiwi + mock fallback)')
@@ -483,12 +472,11 @@ def get_city_airports(code):
     return [code]
 
 def search_all_airports(origin_code, dest_code, departure_date, return_date=None):
-    origins = get_city_airports(origin_code)
+    # Only expand destination — keep the exact origin the user specified to limit API calls
     dests = get_city_airports(dest_code)
     all_results = []
-    for orig in origins:
-        for dest in dests:
-            all_results.extend(search_all_sources(orig, dest, departure_date, return_date))
+    for dest in dests:
+        all_results.extend(search_all_sources(origin_code, dest, departure_date, return_date))
     return sorted(all_results, key=lambda f: f.get('price', float('inf')))
 
 # â”€â”€ Miles Intelligence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -908,11 +896,11 @@ print(f'   Tools   : {len(agent.tools)}')
 import time
 
 async def chat_async(message: str) -> str:
-    result = await Runner.run(agent, message, max_turns=50)
+    result = await Runner.run(agent, message, max_turns=15)
     return result.final_output
 
-def ask(message: str, _retry: int = 3) -> str:
-    '''Send a message to the flight deal agent. Auto-retries on rate limits.'''
+def ask(message: str, _retry: int = 5) -> str:
+    '''Send a message to the agent. Auto-retries on Groq rate limits.'''
     print(f'\n>>> {message}')
     print('-' * 60)
     for attempt in range(_retry):
@@ -921,16 +909,14 @@ def ask(message: str, _retry: int = 3) -> str:
             if loop.is_running():
                 import nest_asyncio
                 nest_asyncio.apply()
-                response = loop.run_until_complete(chat_async(message))
-            else:
-                response = loop.run_until_complete(chat_async(message))
+            response = loop.run_until_complete(chat_async(message))
             print(response)
             return response
         except Exception as e:
             err = str(e)
             if '429' in err or 'rate_limit' in err.lower():
-                wait = 15 * (attempt + 1)
-                print(f'   [rate limit] waiting {wait}s before retry {attempt+1}/{_retry}...')
+                wait = 60 * (attempt + 1)
+                print(f'   [rate limit] waiting {wait}s (attempt {attempt+1}/{_retry})...')
                 time.sleep(wait)
             else:
                 raise
@@ -941,27 +927,27 @@ print('Chat helper ready  --  ask("your message")')
 
 # ── Cell: 27-test1 ──────────────────────────────────────────────
 ask('Show me an overview of my flight hunter')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 28-test2 ──────────────────────────────────────────────
 ask('Search for flights from GRU to CDG on 2026-09-15')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 29-test3 ──────────────────────────────────────────────
 ask('Should I buy a GRU to LHR ticket for R$2,950?')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 30-test4 ──────────────────────────────────────────────
 ask('Find the cheapest dates to fly GRU to Paris in September 2026, plus or minus 7 days')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 31-test5 ──────────────────────────────────────────────
 ask('I have 80000 Smiles miles and 45000 LATAM Pass miles. Update my balances, then compare cash vs miles for a R$3800 ticket GRU to CDG')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 32-test6 ──────────────────────────────────────────────
 ask('Monitor Sao Paulo to Paris in September 2026 and London in October 2026')
-time.sleep(8)
+time.sleep(60)
 
 # ── Cell: 33-test7 ──────────────────────────────────────────────
 ask('Find the cheapest European destination from Sao Paulo for late September 2026. Check CDG, LHR, FCO, and AMS.')
