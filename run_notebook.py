@@ -279,53 +279,6 @@ def search_kiwi(origin, destination, departure_date, return_date=None, currency=
 
 print('âœ… Kiwi source loaded')
 
-# ── Cell: aviationstack ──────────────────────────────────────────────
-# â"€â"€ AviationStack â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
-def search_aviationstack(origin, destination, departure_date, return_date=None, currency='BRL', max_r=10):
-    api_key = os.getenv('AVIATIONSTACK_API_KEY')
-    if not api_key:
-        raise ValueError('AVIATIONSTACK_API_KEY not set')
-    params = {
-        'access_key': api_key,
-        'dep_iata': origin,
-        'arr_iata': destination,
-        'flight_date': departure_date,
-        'limit': max_r,
-    }
-    # Free plan requires HTTP; paid plans support HTTPS
-    resp = requests.get('http://api.aviationstack.com/v1/flights',
-                        params=params, timeout=15)
-    resp.raise_for_status()
-    results = []
-    for f in resp.json().get('data', []):
-        dep = f.get('departure', {})
-        arr = f.get('arrival', {})
-        airline = f.get('airline', {})
-        flight = f.get('flight', {})
-        price = f.get('price')  # only available on paid plans
-        if not price:
-            continue  # free tier returns no prices â€" skip unpriceable results
-        dep_time = (dep.get('scheduled') or departure_date)[:16]
-        arr_time = (arr.get('scheduled') or '')[:16]
-        results.append({
-            'airline': airline.get('name', 'Unknown'),
-            'flight_number': flight.get('iata', ''),
-            'origin': dep.get('iata', origin),
-            'destination': arr.get('iata', destination),
-            'departure': dep_time,
-            'arrival': arr_time,
-            'duration': '',
-            'stops': 0,
-            'bags': 0,
-            'price': float(price),
-            'currency': currency,
-            'url': 'https://aviationstack.com/',
-            'source': 'aviationstack',
-        })
-    return results
-
-print('âœ… AviationStack source loaded')
-
 # ── Cell: 13-unified-search ──────────────────────────────────────────────
 # â”€â”€ Unified search with mock fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 MOCK_AIRLINES = [
@@ -353,8 +306,7 @@ def search_all_sources(origin, destination, departure_date, return_date=None):
     errors = []
     for name, fn in [('Amadeus', search_amadeus),
                      ('Google Flights', search_google_flights),
-                     ('Kiwi', search_kiwi),
-                     ('AviationStack', search_aviationstack)]:
+                     ('Kiwi', search_kiwi)]:
         try:
             results.extend(fn(origin, destination, departure_date, return_date))
         except Exception as e:
@@ -370,7 +322,7 @@ def search_all_sources(origin, destination, departure_date, return_date=None):
             unique.append(f)
     return sorted(unique, key=lambda f: f.get('price', float('inf')))
 
-print('âœ… Unified search ready (Amadeus + Google Flights + Kiwi + AviationStack + mock fallback)')
+print('âœ… Unified search ready (Amadeus + Google Flights + Kiwi + mock fallback)')
 
 # ── Cell: 15-price-intelligence ──────────────────────────────────────────────
 def calculate_percentile(price: float, all_prices: list) -> float:
